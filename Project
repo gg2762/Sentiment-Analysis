@@ -1,0 +1,849 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu May  7 12:26:46 2020
+
+@author: gregoriogalletti
+"""
+
+import pandas as pd
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import PorterStemmer 
+
+#Import file
+the_path = '/Users/gregoriogalletti/Desktop/'
+file = the_path + 'ExtractedTweets.csv'
+
+data = pd.read_csv(file)
+
+stop_words = stopwords.words('english')
+
+#barplot check data set split
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.countplot(x= 'Party',data = data)
+plt.title('Number of Tweets per Party');
+
+
+#clean tweets
+# figure out how to remove stopwords
+data.Tweet = [tw.lower() for tw in data.Tweet] 
+data.Tweet = [re.sub('[^a-zA-Z0-9]+', ' ', tw) for tw in data.Tweet]
+
+
+#from nltk.stem import PorterStemmer
+from nltk.stem.wordnet import WordNetLemmatizer
+
+my_lem = WordNetLemmatizer()
+#my_stem = PorterStemmer()
+
+def no_stop_words(tweet):
+    tweet_list = [ele for ele in tweet.split() if ele != 'user']
+    clean_tokens = [t for t in tweet_list if re.match(r'[^\W\d]*$', t)]
+    clean_s = ' '.join(clean_tokens)
+    clean_mess = [word for word in clean_s.split() if word.lower() not in stopwords.words('english')]
+    tmp_stem = [my_lem.lemmatize(word) for word in clean_mess]
+    join_mess = ' '.join(tmp_stem)
+    join_mess = join_mess.replace('rt','').replace('http','').replace('www','').replace('co ','')
+    return join_mess
+
+data['Tweet_no_sw'] = data['Tweet'].apply(no_stop_words)
+
+
+#print(data['Tweet_no_sw'].iloc[1])
+
+##Count Vectorizer
+from sklearn.feature_extraction.text import CountVectorizer
+
+my_vec = CountVectorizer()
+
+my_xform = my_vec.fit_transform(data.Tweet_no_sw).toarray()
+my_xform_df = pd.DataFrame(my_xform)
+my_xform_df.columns = my_vec.get_feature_names()
+print (my_xform_df.columns)
+
+my_xform_df.head()
+type(my_xform_df)
+
+print(my_xform.shape)
+word_counts = my_xform_df.sum().sort_values(0, ascending=False)
+word_counts.columns
+
+
+
+vec_top15= word_counts[1:16]
+vec_top15.columns = ['words', 'count']
+vec_top15.columns
+
+
+## bar plot: most frequent words
+vec_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('CountVectorizer most common words');
+
+
+##TFIDF
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+my_vec_tfidf = TfidfVectorizer(ngram_range= (1,2), min_df = 5,max_df = 0.50)
+
+my_vec_tfidf = TfidfVectorizer()
+
+my_xform_tfidf = my_vec_tfidf.fit_transform(data.Tweet_no_sw).toarray()
+my_xform_tfidf_df = pd.DataFrame(my_xform_tfidf)
+my_xform_tfidf_df.columns = my_vec_tfidf.get_feature_names()
+#print (my_xform_tfidf.columns)
+
+my_xform_tfidf_df.head()
+
+
+word_counts_tfidf = my_xform_tfidf_df.sum().sort_values(0, ascending=False)
+
+type(word_counts_tfidf)
+
+word_counts_tfidf.head(15)
+
+tfidf_top15= word_counts_tfidf[1:16]
+tfidf_top15.columns = ['words', 'count']
+tfidf_top15.columns
+
+
+## bar plot : most frequent words
+tfidf_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('TFIDF most common words');
+
+##PCA
+##took too long
+from sklearn.decomposition import PCA
+
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+data_rescaled = scaler.fit_transform(my_xform_tfidf) #my xform to use Count vectorizer
+
+
+pca_90_tfidf = PCA(n_components=0.9)
+my_dim_90_tfidf = pca_90_tfidf.fit_transform(data_rescaled)
+
+##concatenate the two data frames
+##With Count Vectorizer
+data['TweetVec']= list(my_xform)
+data['TweetVec'].iloc[7]
+##With Tfidf Vectorizer
+
+data['TweetVec_tfidf']= list(my_xform_tfidf)
+data['TweetVec_tfidf'].iloc[7]
+
+###concatenate with PCA
+data['PCAVec']= list(my_dim_90_tfidf)
+data['PCAVec'].iloc[7]
+
+
+##Split the data
+from sklearn.model_selection import train_test_split
+
+
+X_train, X_test, y_train, y_test = train_test_split(data['TweetVec_tfidf'], data['Party'], test_size=0.2)
+print(X_train.shape, y_train.shape)
+print(X_test.shape, y_test.shape)
+ 
+    
+#### Naive Baynes Model    
+from sklearn.naive_bayes import MultinomialNB
+clf = MultinomialNB().fit(list(X_train), y_train)
+
+data.iloc[8000]
+#print(clf.predict(my_vec_tfidf.transform(["Tax"])))
+
+predictions_MNB = clf.predict(list(X_test))
+
+y_test.value_counts(normalize=True) ##0= 0.503643, 1= 0.496357
+
+
+from sklearn.metrics import confusion_matrix, classification_report,accuracy_score
+
+print(classification_report(predictions_MNB,y_test))
+print(confusion_matrix(predictions_MNB,y_test))
+print(accuracy_score(predictions_MNB,y_test))
+
+#accuracy = 0.7849294471431876 with min 10 and no ngram
+
+#precision    recall  f1-score   support
+
+#    Democrat       0.75      0.77      0.76      8280
+#  Republican       0.79      0.76      0.77      9012
+#
+#    accuracy                           0.77     17292
+#   macro avg       0.77      0.77      0.77     17292
+#weighted avg       0.77      0.77      0.77     17292
+
+##[[6410 1870]
+# [2182 6830]]
+#0.7656719870460329 accuracy with min 15 and ngram(1,2)
+
+#      precision    recall  f1-score   support
+
+#    Democrat       0.74      0.78      0.76      8026
+#  Republican       0.80      0.76      0.78      9266
+
+#    accuracy                           0.77     17292
+#   macro avg       0.77      0.77      0.77     17292
+#weighted avg       0.77      0.77      0.77     17292
+
+#[[6233 1793]
+# [2219 7047]]
+#0.7679851954661115 With min_df 15 and ngram (1,1)
+
+
+##CounVectorizer with ngram(1,1) and min_df 5
+ ##             precision    recall  f1-score   support
+
+ #   Democrat       0.76      0.80      0.78      8087
+#  Republican       0.82      0.78      0.80      9205
+
+#    accuracy                           0.79     17292
+#   macro avg       0.79      0.79      0.79     17292
+#weighted avg       0.79      0.79      0.79     17292
+
+#[[6455 1632]
+# [1993 7212]]
+# 0.7903654869303725 Accuracy
+
+##CounVectorizer with ngram(1,2) and min_df 5
+#                 precision    recall  f1-score   support
+
+#    Democrat       0.77      0.79      0.78      8167
+#  Republican       0.81      0.79      0.80      9125
+
+#    accuracy                           0.79     17292
+#   macro avg       0.79      0.79      0.79     17292
+#weighted avg       0.79      0.79      0.79     17292
+
+#[[6468 1699]
+# [1902 7223]]
+# 0.7917534119824197 Accuracy
+
+#Count Vectorizer with Min_df =5 , ngram(1,2), max_df = 0.5
+
+# precision    recall  f1-score   support
+
+#    Democrat       0.78      0.80      0.79      8215
+#  Republican       0.81      0.80      0.80      9077
+
+#    accuracy                           0.80     17292
+#   macro avg       0.79      0.80      0.79     17292
+#weighted avg       0.80      0.80      0.80     17292
+
+#[[6533 1682]
+# [1859 7218]]
+#0.7952232246125376
+
+#Count Vectorizer with Min_df =5 , ngram(1,3), max_df = 0.5
+#precision    recall  f1-score   support
+
+#    Democrat       0.77      0.81      0.79      7986
+#  Republican       0.83      0.79      0.81      9306
+
+#    accuracy                           0.80     17292
+#   macro avg       0.80      0.80      0.80     17292
+#weighted avg       0.80      0.80      0.80     17292
+
+#[[6490 1496]
+ #[1951 7355]]
+#0.8006592643997225
+
+#with TFIDF
+from sklearn.naive_bayes import MultinomialNB
+clf_tfidf = MultinomialNB().fit(list(X_train), y_train)
+predictions_MNB_TFIDF = clf_tfidf.predict(list(X_test))
+
+print(classification_report(predictions_MNB_TFIDF,y_test))
+print(confusion_matrix(predictions_MNB_TFIDF,y_test))
+print(accuracy_score(predictions_MNB_TFIDF,y_test))
+
+#                   precision    recall  f1-score   support
+
+#    Democrat       0.73      0.77      0.75      7850
+#  Republican       0.80      0.76      0.78      9442
+
+#    accuracy                           0.77     17292
+#   macro avg       0.77      0.77      0.77     17292
+#weighted avg       0.77      0.77      0.77     17292
+
+#[[6083 1767]
+## [2265 7177]]
+#0.7668285912560722 Accuracy
+
+
+#Naive Bayes with TFIDF : min_df =5 , ngram_range = (1,2), max_df = 0.5
+
+#                  precision    recall  f1-score   support
+
+#    Democrat       0.75      0.81      0.78      7901
+#  Republican       0.83      0.78      0.80      9391
+#
+#    accuracy                           0.79     17292
+#   macro avg       0.79      0.79      0.79     17292
+#weighted avg       0.79      0.79      0.79     17292
+
+#[[6396 1505]
+# [2103 7288]]
+#0.7913486005089059 Accuracy
+
+
+#With PCA tfidf
+#did not work
+
+#clf_PCA_tfidf = MultinomialNB().fit(list(X_train), y_train)
+#predictions_MNB_PCA_TFIDF = clf_PCA_tfidf.predict(list(X_test))
+#
+#print(classification_report(predictions_MNB_PCA_TFIDF,y_test))
+#print(confusion_matrix(predictions_MNB_PCA_TFIDF,y_test))
+#print(accuracy_score(predictions_MNB_PCA_TFIDF,y_test))
+
+#### Naive Bayes with CountVectorizer (ngram = (1,2))
+from sklearn.naive_bayes import MultinomialNB
+clf_ngram = MultinomialNB().fit(list(X_train), y_train)
+predictions_MNB_ngram = clf_ngram.predict(list(X_test))
+
+print(classification_report(predictions_MNB_ngram,y_test))
+print(confusion_matrix(predictions_MNB_ngram,y_test))
+print(accuracy_score(predictions_MNB_ngram,y_test))
+
+#                 precision    recall  f1-score   support
+
+#    Democrat       0.75      0.77      0.76      8280
+#  Republican       0.79      0.76      0.77      9012
+
+#    accuracy                           0.77     17292
+#   macro avg       0.77      0.77      0.77     17292
+#weighted avg       0.77      0.77      0.77     17292
+
+#[[6410 1870]
+# [2182 6830]]
+#0.7656719870460329
+
+####Random forest Classifier
+from sklearn.ensemble import RandomForestClassifier
+clf_rf = RandomForestClassifier().fit(list(X_train), y_train)
+predictions_RF = clf_rf.predict(list(X_test))
+
+clf_rf.estimators_[5]
+from sklearn.metrics import confusion_matrix, classification_report,accuracy_score
+
+print(classification_report(predictions_RF,y_test))
+print(confusion_matrix(predictions_RF,y_test))
+print(accuracy_score(predictions_RF,y_test))
+
+
+#                 precision    recall  f1-score   support
+
+#    Democrat       0.72      0.76      0.74      8014
+#  Republican       0.78      0.75      0.76      9278
+
+#    accuracy                           0.75     17292
+#   macro avg       0.75      0.75      0.75     17292
+#weighted avg       0.75      0.75      0.75     17292
+
+#[[6092 1922]
+# [2365 6913]]
+#0.7520818875780708  = Accuracy
+
+##Random forest with PCA
+
+
+
+from sklearn.ensemble import RandomForestClassifier
+clf_rf_PCA = RandomForestClassifier().fit(list(X_train), y_train)
+predictions_RF_PCA = clf_rf_PCA.predict(list(X_test))
+
+from sklearn.metrics import confusion_matrix, classification_report,accuracy_score
+
+print(classification_report(predictions_RF_PCA,y_test))
+print(confusion_matrix(predictions_RF_PCA,y_test))
+print(accuracy_score(predictions_RF_PCA,y_test))
+
+##Random forest with PCA
+
+#    Democrat       0.66      0.65      0.65      8438
+#  Republican       0.67      0.68      0.67      8854
+
+#    accuracy                           0.66     17292
+#   macro avg       0.66      0.66      0.66     17292
+#weighted avg       0.66      0.66      0.66     17292
+
+#[[5500 2938]
+# [2856 5998]]
+#0.6649317603516077 Accuracy
+
+
+
+##Viasualize RF Tree
+
+estimator = clf_rf.estimators_[5]
+
+from sklearn import tree
+
+clf_tree = tree.clf_rf
+tree.plot_tree(clf_rf)
+
+
+################Logistic Regression##############
+#Count Vec
+from sklearn.linear_model import LogisticRegression
+
+clf_lr = LogisticRegression().fit(list(X_train), y_train)
+predictions_LF = clf_lr.predict(list(X_test))
+
+clf_lr.estimators_[5]
+from sklearn.metrics import confusion_matrix, classification_report,accuracy_score
+
+print(classification_report(predictions_LF,y_test))
+print(confusion_matrix(predictions_LF,y_test))
+print(accuracy_score(predictions_LF,y_test))
+
+#                 precision    recall  f1-score   support
+
+#    Democrat       0.75      0.77      0.76      8162
+#  Republican       0.79      0.77      0.78      9130
+
+ #   accuracy                           0.77     17292
+#   macro avg       0.77      0.77      0.77     17292
+#weighted avg       0.77      0.77      0.77     17292
+
+#[[6291 1871]
+# [2067 7063]]
+#0.772264631043257   Accuracy Logistic Regression
+
+
+
+### re run models with TFIDF
+clf_lr_tfidf = LogisticRegression().fit(list(X_train), y_train)
+predictions_LF_tfidf = clf_lr_tfidf.predict(list(X_test))
+
+print(classification_report(predictions_LF_tfidf,y_test))
+print(confusion_matrix(predictions_LF_tfidf,y_test))
+print(accuracy_score(predictions_LF_tfidf,y_test))
+
+#                 precision    recall  f1-score   support
+
+#    Democrat       0.75      0.77      0.76      8116
+#  Republican       0.79      0.78      0.79      9176
+
+#    accuracy                           0.77     17292
+#   macro avg       0.77      0.77      0.77     17292
+#weighted avg       0.77      0.77      0.77     17292
+
+#[[6253 1863]
+# [2039 7137]]
+#0.7743465186213278 Accuracy 
+
+
+
+#######With PCA####################
+#Logistic Regression
+clf_lr_pca = LogisticRegression().fit(list(X_train), y_train)
+predictions_LR_pca = clf_lr_pca.predict(list(X_test))
+
+print(classification_report(predictions_LR_pca,y_test))
+print(confusion_matrix(predictions_LR_pca,y_test))
+print(accuracy_score(predictions_LR_pca,y_test))
+
+
+#           precision    recall  f1-score   support
+
+#    Democrat       0.72      0.74      0.73      8213
+#  Republican       0.76      0.74      0.75      9079
+
+#    accuracy                           0.74     17292
+#   macro avg       0.74      0.74      0.74     17292
+#weighted avg       0.74      0.74      0.74     17292
+
+#[[6111 2102]
+# [2330 6749]]
+#0.7436965070552857 Accuracy
+
+
+
+
+############## Sentiment Analysis################
+###VAder Sentiment
+
+#data['Vader_sentiment'] = [tw.split() for tw in data.Tweet_no_sw] 
+
+
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+vader = SentimentIntensityAnalyzer()
+
+
+def vader_analyzer(tweet_in):
+    vs =vader.polarity_scores(tweet_in)
+    return vs['compound']
+
+
+
+data['Vader_sentiment'] = data['Tweet_no_sw'].apply(vader_analyzer)
+data['Vader_sentiment'].iloc[2]
+###create two drataframe for Republican and Democrats 
+is_democratic = data['Party'] == 'Democrat'
+
+dem_df = data[is_democratic]
+
+is_republican = data['Party'] == 'Republican'
+
+rep_df = data[is_republican]
+data.dim()
+
+#is_republican.head()
+rep_df = data[is_republican]
+
+rep_df['Handle'].iloc[1]
+
+###Most common words
+
+#Democrats
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+my_vec_tfidf = CountVectorizer(min_df =5, ngram_range = (1,3), max_df = 0.5)
+
+dem_xform = my_vec_tfidf.fit_transform(dem_df.Tweet_no_sw).toarray()
+dem_xform_df = pd.DataFrame(dem_xform)
+dem_xform_df.columns = my_vec_tfidf.get_feature_names()
+
+dem_word_count = dem_xform_df.sum().sort_values(0, ascending=False)
+
+#type(dem_word_count)
+
+#dem_word_count.head(15)
+
+#Find most common words and plot them
+dem_words_top15= dem_word_count[1:11]
+dem_words_top15.columns = ['words', 'count']
+dem_words_top15.columns
+
+
+## bar plot
+dem_words_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('Most frequent words amongst Democrats');
+
+
+#Republicans 
+
+rep_xform = my_vec_tfidf.fit_transform(rep_df.Tweet_no_sw).toarray()
+rep_xform_df = pd.DataFrame(rep_xform)
+rep_xform_df.columns = my_vec_tfidf.get_feature_names()
+
+#rep_xform_df.head()
+
+
+rep_word_count = rep_xform_df.sum().sort_values(0, ascending=False)
+
+#Find most common words and plot them
+
+rep_words_top15= rep_word_count[1:11]
+rep_words_top15.columns = ['words', 'count']
+rep_words_top15.columns
+
+
+## bar plot
+rep_words_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('Most frequent words amongst Republicans');
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+
+#####Score by handle graph
+dem_df.groupby('Handle').Vader_sentiment.mean().plot(label = 'Democrats').xaxis.set_visible(False)
+rep_df.groupby('Handle').Vader_sentiment.mean().plot(label = 'Republicans').xaxis.set_visible(False)
+plt.legend()
+plt.title('Average sentiment score for each representative');
+
+##Distribution plot
+
+sns.kdeplot(data.Vader_sentiment)
+
+sns.kdeplot(dem_df.Vader_sentiment, label = 'Democrats', shade = True)
+sns.kdeplot(rep_df.Vader_sentiment, label = 'Republicans', shade = True)
+plt.axvline(x = dem_df['Vader_sentiment'].mean(), label = 'Democrats Mean',ls ='--')
+plt.axvline(x = rep_df['Vader_sentiment'].mean(), color = 'orange', label = 'Republicans Mean',ls ='--')
+plt.legend()
+plt.title('Distribution of sentiment scores');
+
+
+#barplot rep vs dem 
+
+sns.barplot(x = 'Party', y = 'Vader_sentiment', data = data)
+plt.title('Average Vader score by Party');
+
+#####################Climate Change##################
+
+##words related to climate change
+cc_words = 'global warming|climate change|climatechange|ghg|green house gasses'
+
+type(cc_words)
+
+#data['Words'] = [tw.split() for tw in data.Tweet_no_sw] 
+
+#data.drop(['Words'], axis = 1)
+
+data['Climate Change']  = [len(re.findall(cc_words, tw)) for tw in data.Tweet_no_sw]
+
+#df_cc.Vader_sentiment.iloc[1]
+
+is_cc = data['Climate Change'] != 0
+
+df_cc = data[is_cc]
+
+####Average vader score per party
+sns.barplot(x = 'Party', y = 'Vader_sentiment', data = df_cc)
+plt.title('Average sentiment score about Climate Change');
+
+###Distribution of tweets per party related to climate change
+sns.countplot(x= 'Party',data = df_cc)
+plt.title('Number of tweets about Climate Change per Party');
+
+
+##### most common words
+from sklearn.feature_extraction.text import CountVectorizer
+
+my_vec_tfidf = CountVectorizer(min_df =5, ngram_range = (1,3), max_df = 0.5)
+
+cc_xform = my_vec_tfidf.fit_transform(df_cc.Tweet_no_sw).toarray()
+cc_xform_df = pd.DataFrame(cc_xform)
+cc_xform_df.columns = my_vec_tfidf.get_feature_names()
+
+
+cc_word_count = cc_xform_df.sum().sort_values(0, ascending=False)
+
+type(cc_word_count)
+
+
+
+cc_word_top15= cc_word_count[1:15]
+cc_word_top15.columns = ['words', 'count']
+cc_word_top15.columns
+
+
+## bar plot
+cc_word_top15.groupby('Party').plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('Most common words about Climate Change');
+
+
+cc_word_top15.head()
+
+##Distrubution plot
+
+
+dem_cc_df = df_cc[is_democratic]
+
+
+rep_cc_df = df_cc[is_republican]
+
+sns.kdeplot(dem_cc_df.Vader_sentiment, label = 'Democrats', shade = True)
+sns.kdeplot(rep_cc_df.Vader_sentiment, label = 'Republicans', shade = True)
+plt.axvline(x = dem_cc_df['Vader_sentiment'].mean(), label = 'Democrats Mean',ls ='--')
+plt.axvline(x = rep_cc_df['Vader_sentiment'].mean(), color = 'orange', label = 'Republicans Mean',ls ='--')
+plt.legend()
+plt.title('Distribution of sentiment scores about Climate Change');
+
+import scipy.stats as stats
+
+stats.f_oneway(dem_cc_df.Vader_sentiment,rep_cc_df.Vader_sentiment)
+
+
+sns.distplot(dem_cc_df.Vader_sentiment, label = 'Democrats', hist = False)
+sns.distplot(rep_cc_df.Vader_sentiment, label = 'Republicans', hist = False)
+plt.axvline(x = dem_cc_df['Vader_sentiment'].median())
+plt.axvline(x = rep_cc_df['Vader_sentiment'].median())
+plt.legend();
+####################Fossil Fuel####################
+
+##words related to climate change
+ff_words = 'fossil fuels|oil|natural gas|petroleum|ff'
+
+type(cc_words)
+
+#data['Words'] = [tw.split() for tw in data.Tweet_no_sw] 
+
+#data.drop(['Words'], axis = 1)
+
+data['Fossil Fuel']  = [len(re.findall(ff_words, tw)) for tw in data.Tweet_no_sw]
+
+#df_cc.Vader_sentiment.iloc[1]
+
+
+is_ff = data['Fossil Fuel'] != 0
+
+df_ff = data[is_ff]
+df_ff.Vader_sentiment.mean()
+
+df_ff = data[is_ff]
+df_ff.head()
+####Average vader score per party
+sns.barplot(x = 'Party', y = 'Vader_sentiment', data = df_ff)
+plt.title('Average sentiment score about Fossil Fuel');
+
+###Distribution of tweets per party related to fossil fuel
+sns.countplot(x= 'Party',data = df_ff)
+plt.title('Number of tweets about Fossil Fuel per Party');
+
+####most common words
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+my_vec_tfidf = TfidfVectorizer(min_df = 15)
+
+ff_xform = my_vec_tfidf.fit_transform(df_ff.Tweet_no_sw).toarray()
+ff_xform_df = pd.DataFrame(ff_xform)
+ff_xform_df.columns = my_vec_tfidf.get_feature_names()
+
+
+ff_word_count = ff_xform_df.sum().sort_values(0, ascending=False)
+
+
+
+ff_word_top15= ff_word_count[1:15]
+ff_word_top15.columns = ['words', 'count']
+ff_word_top15.columns
+
+
+## bar plot
+ff_word_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('Most common words about Fossil Fuels');
+
+
+df_ff.groupby('Handle').Vader_sentiment.mean().plot(label = 'Fossi Fuel').xaxis.set_visible(False)
+df_cc.groupby('Handle').Vader_sentiment.mean().plot(label = 'Climate Change').xaxis.set_visible(False)
+plt.legend()
+plt.title('Represenatives averge vader score about Climate Change and Fossil Fuels');
+
+
+dem_ff_df = df_ff[is_democratic]
+rep_ff_df = df_ff[is_republican]
+
+
+
+# distribution plot aboout climate change and fossil fuel
+sns.kdeplot(dem_cc_df.Vader_sentiment, label = 'Dem climate change', shade = True)
+sns.kdeplot(rep_cc_df.Vader_sentiment, label = 'Rep climate change', shade = True)
+sns.kdeplot(dem_ff_df.Vader_sentiment, label = 'Dem fossil fuels', shade = True)
+sns.kdeplot(rep_ff_df.Vader_sentiment, label = 'Rep fossil fuels', shade = True)
+plt.axvline(x = dem_cc_df['Vader_sentiment'].mean(), label = 'Dem climate change mean',ls ='--')
+plt.axvline(x = rep_cc_df['Vader_sentiment'].mean(), color = 'orange', label = 'Rep climate change mean',ls ='--')
+plt.axvline(x = dem_ff_df['Vader_sentiment'].mean(), label = 'Dem fossil fuels mean',ls ='--', color = 'green')
+plt.axvline(x = rep_ff_df['Vader_sentiment'].mean(), label = 'Rep fossil fuels mean',ls ='--', color ='r')
+plt.legend(bbox_to_anchor=(1.05, 1.0), loc='upper left')
+plt.title('Distribution of sentiment scores about Climate Change and Fossil Fuels');
+
+sns.kdeplot(dem_ff_df.Vader_sentiment, label = 'Dememocrats', shade = True)
+sns.kdeplot(rep_ff_df.Vader_sentiment, label = 'Republicans', shade = True)
+plt.axvline(x = dem_ff_df['Vader_sentiment'].mean(), label = 'Dememocrats Mean',ls ='--')
+plt.axvline(x = rep_ff_df['Vader_sentiment'].mean(), label = 'Republicans Mean',ls ='--', color ='orange')
+plt.legend()
+plt.title('Distribution of sentiment scores about Fossil Fuels');
+
+########Trump
+trump_words = 'trump|realdonaldtrump'
+
+data['Trump']  = [len(re.findall(trump_words, tw)) for tw in data.Tweet_no_sw]
+
+data['Trump'].iloc[110]
+is_trump = data['Trump'] != 0 
+
+score_nonzero = data['Vader_sentiment'] != 0
+
+df_trump = data[is_trump]
+df_t_nonzero = df_trump[score_nonzero]
+
+df_trump #4889
+df_trump.head()
+
+###Vader Setiment about Trump
+sns.barplot(x = 'Party', y = 'Vader_sentiment', data = df_trump)
+plt.title('Average sentiment score about Trump');
+
+#Tweet distrubiution about trump
+sns.countplot(x= 'Party',data = df_trump)
+plt.title('Number of tweets about Trump per Party');
+
+df_trump.head()
+
+#Vader score about Trump per Handle
+
+is_democratic = data['Party'] == 'Democrat'
+
+dem_trump_df = df_trump[is_democratic]
+
+is_republican = data['Party'] == 'Republican'
+
+rep_trump_df = df_trump[is_republican]
+
+#non zero scores
+dem_trump_nz_df = df_t_nonzero[is_democratic]
+rep_trump_nz_df = df_t_nonzero[is_republican]
+
+dem_trump_df.groupby('Handle').Vader_sentiment.mean().plot(label = 'Democrats').xaxis.set_visible(False)
+rep_trump_df.groupby('Handle').Vader_sentiment.mean().plot(label = 'Republicans').xaxis.set_visible(False)
+plt.legend()
+plt.title('Average sentiment score about Trump for each representative');
+
+sns.kdeplot(dem_trump_nz_df.Vader_sentiment, label = 'Democrats', shade = True)
+sns.kdeplot(rep_trump_nz_df.Vader_sentiment, label = 'Republicans', shade = True)
+plt.axvline(x = dem_trump_df['Vader_sentiment'].mean(), label = 'Dememocrats Mean',ls ='--')
+plt.axvline(x = rep_trump_nz_df['Vader_sentiment'].mean(),label = 'Republicans Mean',ls ='--', color ='orange')
+plt.legend()
+plt.title('Distribution of sentiment scores about Trump');
+
+
+
+##Mean differences
+rep_trump_df['Vader_sentiment'].mean()- dem_trump_df['Vader_sentiment'].mean() #0.2602671636085456
+
+rep_ff_df['Vader_sentiment'].mean()- rep_ff_df['Vader_sentiment'].mean() #0.07142176000640377
+
+rep_cc_df['Vader_sentiment'].mean()- dem_cc_df['Vader_sentiment'].mean() #0.21118738512949045
+
+rep_df['Vader_sentiment'].mean()- dem_df['Vader_sentiment'].mean() #0.08212734475279887
+
+
+#most frequent words
+trump_dem_xform = my_vec_tfidf.fit_transform(dem_trump_df.Tweet_no_sw).toarray()
+trump_dem_df = pd.DataFrame(trump_dem_xform)
+trump_dem_df.columns = my_vec_tfidf.get_feature_names()
+
+trump_dem_count = trump_dem_df.sum().sort_values(0, ascending=False)
+
+
+#rep_trump_df
+dem_trump_top15= ff_word_count[1:15]
+dem_trump_top15.columns = ['words', 'count']
+dem_trump_top15.columns
+
+
+## bar plot
+dem_trump_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('Most common words by Democrats about Trump');
+
+
+#republicans
+
+trump_rep_xform = my_vec_tfidf.fit_transform(rep_trump_df.Tweet_no_sw).toarray()
+trump_rep_df = pd.DataFrame(trump_rep_xform)
+trump_rep_df.columns = my_vec_tfidf.get_feature_names()
+
+trump_rep_count = trump_rep_df.sum().sort_values(0, ascending=False)
+
+
+#rep_trump_df
+rep_trump_top15= ff_word_count[1:15]
+rep_trump_top15.columns = ['words', 'count']
+rep_trump_top15.columns
+
+
+## bar plot
+rep_trump_top15.plot.barh(x = 'words', y = 'count', rot = 0)
+plt.title('Most common words by Republicans about Trump');
